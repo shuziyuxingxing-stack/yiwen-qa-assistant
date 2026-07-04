@@ -122,7 +122,6 @@ http://127.0.0.1:8013/admin/yiwen/shared/login
 http://127.0.0.1:8013
 ```
 
-如果部署到公网或绑定域名，把下面地址里的 `http://127.0.0.1:8013` 替换为实际域名即可。
 
 ### 前端页面
 
@@ -254,13 +253,6 @@ PRIVATE_SYSU_SERVICE_URL=https://jwxt.sysu.edu.cn/jwxt/
 PRIVATE_SYSU_SINGLE_USER_FALLBACK=1
 ```
 
-注意不要提交运行态和密钥文件：
-
-```text
-.env
-.state/
-.venv/
-```
 
 ## 致谢
 
@@ -269,3 +261,4 @@ PRIVATE_SYSU_SINGLE_USER_FALLBACK=1
 - SYSU-Anything: https://github.com/qybaihe/SYSU-Anything
 - SYSU freshman materials: https://github.com/thinktraveller/SYSU_freshman_materials
 - arxiv.jaison.ink: https://arxiv.jaison.ink
+
