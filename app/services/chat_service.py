@@ -304,8 +304,9 @@ class ChatService:
                 chat_id=fallback_chat_id,
                 route="public",
                 answer=answer,
-                sources=[AnswerSource(type="system", title="塔社新生资料包", system="freshman_materials", detail=detail)],
+                sources=[AnswerSource(type="system", title="中大真题资料查询", system="freshman_materials", detail=detail)],
                 actions=[],
+                answer_pages=status.get("answer_pages", []),
             )
 
         kb_hits, external_hits, combined_context = await self._collect_auxiliary_context(payload, route)
@@ -388,6 +389,8 @@ class ChatService:
             ],
             actions=public_actions + [self._private_action(private_result)],
         )
+
+
 
 
 

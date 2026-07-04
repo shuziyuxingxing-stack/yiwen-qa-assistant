@@ -9,7 +9,7 @@ const CHANNELS = {
   web_search: { title: "联网搜索", desc: "使用逸问官方“联网搜索”范围回答。", searchSource: "internetSE", hint: "当前栏目：联网搜索。适合问需要外部网页或实时信息的问题。" },
   model: { title: "模型问答", desc: "使用逸问官方“模型问答”范围回答。", searchSource: "model", hint: "当前栏目：模型问答。适合通用推理、写作、解释类问题。" },
   private: { title: "私人事务", desc: "使用用户自己的中大账号会话查询本人事务。", searchSource: "private", hint: "当前栏目：私人事务。仅用于我的预约、我的请假进度、我的审批状态、我的成绩/课表等本人数据。" },
-  freshman_materials: { title: "塔社新生资料包", desc: "检索塔社 SYSU 新生资料包的 GitHub 文件路径。", searchSource: "freshman_materials", hint: "当前栏目：塔社新生资料包。适合问某份资料、题库、指南、文档在哪个目录。" },
+  freshman_materials: { title: "中大真题资料查询", desc: "检索塔社 GitHub 新生资料包和破壁计划 arxiv.jaison.ink 的真题/资料路径。", searchSource: "freshman_materials", hint: "当前栏目：中大真题资料查询。适合问高数真题、军理题库、课程资料等资源在哪。" },
 };
 
 let activeChannel = localStorage.getItem(CHANNEL_KEY) || "sysu_kb";
@@ -106,7 +106,7 @@ function applyChannel(channel) {
   messageInput.placeholder = activeChannel === "private"
     ? "输入私人事务，例如：查询我预约的自习室、查看我的请假进度"
     : (activeChannel === "freshman_materials"
-      ? "输入资料关键词，例如：军理题库在哪、南校园食堂简介在哪"
+      ? "输入资料关键词，例如：高数真题、军理题库在哪"
       : `在“${config.title}”中提问`);
 }
 
@@ -226,7 +226,13 @@ function renderChatResponse(data) {
     .join("、");
   const mode = activeChannel === "private" ? "私人事务" : CHANNELS[activeChannel].title;
   const meta = `${mode}${sourceText ? ` | ${sourceText}` : ""}`;
-  addMessage("assistant", data.answer || "没有返回内容。", meta);
+  const pages = Array.isArray(data.answer_pages) && data.answer_pages.length
+    ? data.answer_pages
+    : [data.answer || "没有返回内容。"];
+  pages.forEach((page, index) => {
+    const pageMeta = pages.length > 1 ? `${meta} · 第 ${index + 1}/${pages.length} 页` : meta;
+    addMessage("assistant", page, pageMeta);
+  });
 
   const needsAction = (data.actions || []).find((action) => action.needed);
   if (needsAction) {
@@ -414,6 +420,8 @@ messageInput.addEventListener("keydown", (event) => {
   });
   addMessage("assistant", "公共问题请使用官方四个栏目；私人事务只用于查询本人数据，需要先在左侧完成企业微信扫码绑定。", "系统");
 })();
+
+
 
 
 

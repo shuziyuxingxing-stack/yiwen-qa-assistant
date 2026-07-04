@@ -32,5 +32,7 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 @app.get("/", include_in_schema=False)
 async def index() -> RedirectResponse:
-    return RedirectResponse(url="/static/index.html?v=20260704-freshman-channel")
+    return RedirectResponse(url="/static/index.html?v=20260704-sysu-materials-pages")
+
+
 

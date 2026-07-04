@@ -58,6 +58,7 @@ class ChatResponse(BaseModel):
     answer: str
     sources: list[AnswerSource]
     actions: list[ChatAction] = Field(default_factory=list)
+    answer_pages: list[str] = Field(default_factory=list)
 
 
 class PersonalQueryRequest(BaseModel):
@@ -102,5 +103,6 @@ class KbSearchHitResponse(KbDocumentResponse):
 class KbSearchResponse(BaseModel):
     query: str
     hits: list[KbSearchHitResponse]
+
 
 

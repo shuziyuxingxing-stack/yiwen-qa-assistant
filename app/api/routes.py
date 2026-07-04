@@ -542,7 +542,7 @@ async def channels() -> dict[str, Any]:
             {'channel': 'sysu_news', 'title': '校内资讯', 'route': 'public', 'upstream': 'yiwen', 'search_source': 'sysuSE', 'cli_arg': '--search-source sysuSE'},
             {'channel': 'web_search', 'title': '联网搜索', 'route': 'public', 'upstream': 'yiwen', 'search_source': 'internetSE', 'cli_arg': '--search-source internetSE'},
             {'channel': 'model', 'title': '模型问答', 'route': 'public', 'upstream': 'yiwen', 'search_source': 'model', 'cli_arg': '--search-source model'},
-            {'channel': 'freshman_materials', 'title': '塔社新生资料包', 'route': 'public', 'upstream': 'github_tree_index', 'search_source': None, 'cli_arg': None},
+            {'channel': 'freshman_materials', 'title': '中大真题资料查询', 'route': 'public', 'upstream': 'sysu_materials_index', 'search_source': None, 'cli_arg': None},
             {'channel': 'private', 'title': '私人事务', 'route': 'private', 'upstream': 'private_connectors', 'search_source': None, 'cli_arg': None},
         ]
     }
@@ -554,25 +554,54 @@ async def external_kb_status() -> dict[str, Any]:
 
 
 
-@router.get('/materials/freshman/search')
-async def freshman_materials_search(q: str = Query(..., min_length=1), limit: int = Query(default=8, ge=1, le=20)) -> dict[str, Any]:
+async def _sysu_materials_search_payload(q: str, limit: int) -> dict[str, Any]:
     hits = await freshman_materials_service.search(q, limit=limit)
+    status = freshman_materials_service.status()
     return {
         'query': q,
-        'repo': freshman_materials_service.github_repo_url,
+        'title': '中大真题资料查询',
+        'sources': status.get('sources', []),
+        'github_repo': freshman_materials_service.github_repo_url,
+        'arxiv_site': freshman_materials_service.arxiv_base_url,
         'hits': [hit.__dict__ for hit in hits],
     }
+
+
+@router.get('/materials/sysu/search')
+async def sysu_materials_search(q: str = Query(..., min_length=1), limit: int = Query(default=24, ge=1, le=60)) -> dict[str, Any]:
+    return await _sysu_materials_search_payload(q, limit)
+
+
+@router.get('/materials/freshman/search')
+async def freshman_materials_search(q: str = Query(..., min_length=1), limit: int = Query(default=24, ge=1, le=60)) -> dict[str, Any]:
+    return await _sysu_materials_search_payload(q, limit)
+
+
+@router.get('/materials/sysu/status')
+async def sysu_materials_status() -> dict[str, Any]:
+    return freshman_materials_service.status()
+
+
 @router.get('/materials/freshman/status')
 async def freshman_materials_status() -> dict[str, Any]:
     return freshman_materials_service.status()
 
 
+@router.post('/materials/sysu/refresh')
+async def sysu_materials_refresh() -> dict[str, Any]:
+    try:
+        return await freshman_materials_service.refresh_all()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
 @router.post('/materials/freshman/refresh')
 async def freshman_materials_refresh() -> dict[str, Any]:
     try:
-        return await freshman_materials_service.refresh()
+        return await freshman_materials_service.refresh_all()
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
 @router.get('/sources')
 async def sources() -> dict[str, list[dict[str, str]]]:
     return {
@@ -893,7 +922,7 @@ async def official_interfaces() -> dict[str, Any]:
         {'key': 'bus_schedule', 'system': 'bus', 'title': '校区班车/校车时刻', 'auth_required': False, 'channel': 'sysu_kb', 'sample_prompt': '查询校车', 'upstream_basis': 'sysu-anything bus --json'},
         {'key': 'career_teachin_list', 'system': 'career', 'title': '就业宣讲会列表', 'auth_required': False, 'channel': 'sysu_kb', 'sample_prompt': '查一下最近3场宣讲会', 'upstream_basis': 'sysu-anything career teachin list --limit 3 --json'},
         {'key': 'career_job_list', 'system': 'career', 'title': '就业岗位/实习岗位列表', 'auth_required': False, 'channel': 'sysu_kb', 'sample_prompt': '查一下实习岗位5条', 'upstream_basis': 'sysu-anything career job list --limit 5 --json'},
-        {'key': 'freshman_materials', 'system': 'freshman_materials', 'title': '塔社新生资料包路径检索', 'auth_required': False, 'channel': 'freshman_materials', 'sample_prompt': '军理题库在哪', 'upstream_basis': 'GitHub tree index: thinktraveller/SYSU_freshman_materials'},
+        {'key': 'freshman_materials', 'system': 'freshman_materials', 'title': '中大真题资料查询', 'auth_required': False, 'channel': 'freshman_materials', 'sample_prompt': '军理题库在哪', 'upstream_basis': 'GitHub tree index: thinktraveller/SYSU_freshman_materials; arxiv.jaison.ink live API: /api/materials,/api/packages'},
         {'key': 'jwxt_timetable', 'system': 'jwxt', 'title': '本人课表/今日课程', 'auth_required': True, 'channel': 'private', 'sample_prompt': '查询今天课表', 'upstream_basis': 'sysu-anything today --state-dir <user-state> --json'},
         {'key': 'jwxt_leave', 'system': 'jwxt', 'title': '本人请假记录/审核流', 'auth_required': True, 'channel': 'private', 'sample_prompt': '查询我的请假记录', 'upstream_basis': 'sysu-anything jwxt leave list --state-dir <user-state> --json'},
         {'key': 'jwxt_leave_apply', 'system': 'jwxt', 'title': '本人请假申请预览/确认提交', 'auth_required': True, 'channel': 'private', 'sample_prompt': '申请请假：病假，2026-07-08 全天，说明发烧去校医院，附件 C:\\tmp\\proof.png', 'upstream_basis': 'sysu-anything jwxt leave apply 默认预览；只有用户明确“确认提交请假申请”才追加 --confirm'},
@@ -978,6 +1007,9 @@ async def official_probe(
         'errors': sum(1 for item in results if item['status'] == 'error'),
         'results': results,
     }
+
+
+
 
 
 
