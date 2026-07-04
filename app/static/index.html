@@ -1,0 +1,97 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>逸问问答助手</title>
+    <link rel="stylesheet" href="/static/style.css?v=20260704-layout-freshman" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">逸</div>
+          <div>
+            <h1>逸问问答助手</h1>
+            <p>公共问题使用共享逸问账号；私人事务使用用户自己的中大账号会话。</p>
+          </div>
+        </div>
+        <section class="identity-panel">
+          <label for="user-id">本机会话</label>
+          <div class="identity-row">
+            <input id="user-id" value="正在创建..." readonly autocomplete="off" />
+            <button id="login-button" type="button">重建会话</button>
+          </div>
+          <p id="identity-status">本机会话由后端随机生成，只用于隔离本浏览器的聊天和私人绑定；私人事务以用户自己的企业微信扫码登录为准。</p>
+        </section>
+        <section class="mode-panel">
+          <h2>服务状态</h2>
+          <div class="capability ok">
+            <span>公共问答</span>
+            <strong id="public-status">检测中</strong>
+          </div>
+          <div class="capability pending">
+            <span>私人事务</span>
+            <strong id="private-status">需要个人登录</strong>
+          </div>
+          <div class="private-auth-actions">
+            <button id="private-login-button" type="button">企业微信扫码绑定</button>
+            <button id="private-refresh-button" type="button" class="ghost-button">刷新教务会话</button>
+          </div>
+          <div class="private-auth-panel" id="private-auth-panel" hidden>
+            <img id="private-qr" alt="企业微信登录二维码" />
+            <p id="private-auth-status">等待生成二维码。</p>
+          </div>
+        </section>
+      </aside>
+
+      <section class="chat-shell">
+        <header class="chat-header">
+          <div>
+            <h2 id="channel-title">校内知识库</h2>
+            <p id="channel-desc">使用逸问官方“校内知识库”范围回答。</p>
+          </div>
+          <button id="clear-button" type="button" class="ghost-button">清空</button>
+        </header>
+
+        <div id="messages" class="messages" aria-live="polite"></div>
+
+        <form id="chat-form" class="chat-form">
+          <textarea id="message" rows="3" placeholder="输入问题，例如：请简单介绍一下图书馆预约规则"></textarea>
+          <div class="composer-actions">
+            <div class="composer-left">
+              <div class="channel-picker" id="channel-picker">
+                <button class="channel-toggle" id="channel-toggle" type="button" aria-haspopup="menu" aria-expanded="false">
+                  <span class="channel-label">栏目</span>
+                  <span id="channel-current">校内知识库</span>
+                  <span class="channel-caret">▾</span>
+                </button>
+                <div class="channel-menu" id="channel-menu" role="menu" aria-label="选择问答栏目">
+                  <button class="channel-option active" type="button" role="menuitem" data-channel="sysu_kb">校内知识库</button>
+                  <button class="channel-option" type="button" role="menuitem" data-channel="sysu_news">校内资讯</button>
+                  <button class="channel-option" type="button" role="menuitem" data-channel="web_search">联网搜索</button>
+                  <button class="channel-option" type="button" role="menuitem" data-channel="model">模型问答</button>
+                  <button class="channel-option" type="button" role="menuitem" data-channel="freshman_materials">塔社新生资料包</button>
+                  <button class="channel-option" type="button" role="menuitem" data-channel="private">私人事务</button>
+                </div>
+              </div>
+            </div>
+            <div class="hint" id="composer-hint">当前栏目：校内知识库。私人预约、审批、课表、成绩请切换到“私人事务”。</div>
+            <button id="send-button" type="submit">发送</button>
+          </div>
+        </form>
+      </section>
+    </main>
+    <script src="/static/app.js?v=20260704-freshman-channel"></script>
+  </body>
+</html>
+
+
+
+
+
+
+
+
+
+

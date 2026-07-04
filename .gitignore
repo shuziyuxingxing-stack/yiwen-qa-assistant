@@ -1,0 +1,37 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual env
+.venv/
+venv/
+env/
+
+# Runtime state and secrets
+.env
+.env.*
+!.env.example
+.state/
+*.sqlite
+*.db
+
+# Logs
+*.log
+uvicorn*.out.log
+uvicorn*.err.log
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local generated artifacts
+*.tmp
+*.bak

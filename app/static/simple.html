@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>逸问问答助手 - 简单验证</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; padding: 2rem; max-width: 800px; margin: 0 auto; background: #f7f5f1; }
+    h1 { margin-bottom: 1rem; font-size: 1.5rem; }
+    section { background: white; padding: 1.5rem; margin-bottom: 1rem; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    h2 { font-size: 1.1rem; margin-bottom: 0.5rem; }
+    label { display: block; margin-bottom: 0.25rem; font-size: 0.9rem; color: #666; }
+    input, textarea { width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px; font: inherit; margin-bottom: 0.75rem; }
+    button { padding: 0.5rem 1rem; border: none; border-radius: 4px; background: #3C5A78; color: white; cursor: pointer; font: inherit; }
+    button:hover { background: #2E4760; }
+    pre { background: #f5f5f5; padding: 1rem; border-radius: 4px; overflow-x: auto; font-size: 0.85rem; white-space: pre-wrap; word-wrap: break-word; }
+  </style>
+</head>
+<body>
+  <h1>逸问问答助手 - 简单验证</h1>
+  
+  <section>
+    <h2>1. 登录本地助手</h2>
+    <label>用户 ID</label>
+    <input id="user-id" value="demo-user" />
+    <label>显示名称（可选）</label>
+    <input id="display-name" placeholder="例如：张同学" />
+    <button onclick="login()">登录</button>
+    <pre id="login-result">等待登录...</pre>
+  </section>
+
+  <section>
+    <h2>2. 写入辅助知识库（可选）</h2>
+    <label>标题</label>
+    <input id="kb-title" value="图书馆本地补充规则" />
+    <label>内容</label>
+    <textarea id="kb-content" rows="3">图书馆研讨室预约需要提前一天提交，临时取消请在预约开始前处理。</textarea>
+    <button onclick="writeKb()">写入知识库</button>
+    <pre id="kb-result">等待操作...</pre>
+  </section>
+
+  <section>
+    <h2>3. 问答（逸问 + 本地知识库）</h2>
+    <label>问题</label>
+    <textarea id="question" rows="3">请简单介绍一下图书馆预约规则</textarea>
+    <button onclick="chat()">发送问题</button>
+    <pre id="chat-result">等待问答...</pre>
+  </section>
+
+  <script>
+    let token = '';
+    
+    async function login() {
+      const userId = document.getElementById('user-id').value.trim();
+      const displayName = document.getElementById('display-name').value.trim();
+      if (!userId) {
+        document.getElementById('login-result').textContent = 'user_id 不能为空';
+        return;
+      }
+      
+      try {
+        const response = await fetch('/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: userId, display_name: displayName || undefined })
+        });
+        const data = await response.json();
+        document.getElementById('login-result').textContent = JSON.stringify(data, null, 2);
+        if (data.access_token) {
+          token = data.access_token;
+        }
+      } catch (err) {
+        document.getElementById('login-result').textContent = '登录失败: ' + err.message;
+      }
+    }
+    
+    async function writeKb() {
+      if (!token) {
+        document.getElementById('kb-result').textContent = '请先登录本地助手';
+        return;
+      }
+      const title = document.getElementById('kb-title').value.trim();
+      const content = document.getElementById('kb-content').value.trim();
+      if (!title || !content) {
+        document.getElementById('kb-result').textContent = '标题和内容不能为空';
+        return;
+      }
+      
+      try {
+        const response = await fetch('/kb/documents', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({ title, content, source: 'manual', tags: ['本地'], visibility: 'public' })
+        });
+        const data = await response.json();
+        document.getElementById('kb-result').textContent = JSON.stringify(data, null, 2);
+      } catch (err) {
+        document.getElementById('kb-result').textContent = '写入失败: ' + err.message;
+      }
+    }
+    
+    async function chat() {
+      if (!token) {
+        document.getElementById('chat-result').textContent = '请先登录本地助手';
+        return;
+      }
+      const question = document.getElementById('question').value.trim();
+      if (!question) {
+        document.getElementById('chat-result').textContent = '问题不能为空';
+        return;
+      }
+      
+      document.getElementById('chat-result').textContent = '处理中...';
+      try {
+        const response = await fetch('/chat', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({ message: question })
+        });
+        const data = await response.json();
+        document.getElementById('chat-result').textContent = JSON.stringify(data, null, 2);
+      } catch (err) {
+        document.getElementById('chat-result').textContent = '问答失败: ' + err.message;
+      }
+    }
+  </script>
+</body>
+</html>
