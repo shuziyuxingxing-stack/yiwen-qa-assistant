@@ -1,7 +1,8 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import math
+import os
 import re
 import time
 from datetime import datetime
@@ -45,6 +46,17 @@ class FreshmanMaterialsService:
         "的", "一下", "相关", "具体", "github", "GitHub",
     )
 
+    NOISE_TERMS = (
+        ".gitattributes", "广告", "宣传", "资料说明", "资料框架", "xmind", "四级", "六级", "四六级",
+        "作文预测", "翻译预测", "思政类公必课",
+    )
+
+    QUERY_ALIASES = {
+        "程序设计": ("程序设计", "高级程序设计", "并行程序设计", "c语言", "c++", "cpp", "python"),
+        "程设": ("程序设计", "高级程序设计", "c语言", "c++", "cpp"),
+        "高程": ("高级程序设计", "程序设计", "c++", "cpp"),
+    }
+
     ARXIV_CATEGORY_LABELS = {
         "past_exam": "历年真题",
         "study_material": "学习资料",
@@ -56,6 +68,7 @@ class FreshmanMaterialsService:
         self.cache_path = cache_path or Path(".state") / "freshman_materials_tree.json"
         self._tree: list[dict[str, Any]] | None = None
         self._loaded_at: float | None = None
+        self.cache_ttl_seconds = int(os.getenv("FRESHMAN_MATERIALS_CACHE_TTL_SECONDS", "86400"))
         self._last_error: str | None = None
 
     @staticmethod
@@ -78,6 +91,8 @@ class FreshmanMaterialsService:
             cleaned = cleaned.replace(word, " ")
         normalized = cls._normalize_text(cleaned)
         terms: set[str] = {token for token in normalized.split() if len(token) >= 2}
+        if any(word in query for word in ("真题", "试题", "考题", "考试")):
+            terms.add("真题")
         chinese = "".join(re.findall(r"[\u4e00-\u9fff]+", cleaned))
         if len(chinese) >= 2:
             for size in range(2, min(7, len(chinese) + 1)):
@@ -86,6 +101,46 @@ class FreshmanMaterialsService:
         ascii_terms = re.findall(r"[a-zA-Z0-9]{2,}", cleaned)
         terms.update(term.lower() for term in ascii_terms)
         return sorted(terms, key=len, reverse=True)
+
+
+    @classmethod
+    def _expanded_terms(cls, query: str, terms: list[str]) -> list[str]:
+        expanded = set(terms)
+        normalized_query = cls._normalize_text(query)
+        compact_query = normalized_query.replace(" ", "")
+        for key, aliases in cls.QUERY_ALIASES.items():
+            if key in compact_query:
+                expanded.update(alias.lower() for alias in aliases)
+        return sorted(expanded, key=len, reverse=True)
+
+    @classmethod
+    def _is_noise_path(cls, path: str) -> bool:
+        normalized = cls._normalize_text(path)
+        return any(cls._normalize_text(term) in normalized for term in cls.NOISE_TERMS)
+
+    @classmethod
+    def _required_terms(cls, query: str, terms: list[str]) -> list[str]:
+        normalized_query = cls._normalize_text(query)
+        required: list[str] = []
+        if "程序设计" in normalized_query.replace(" ", "") or "程设" in normalized_query:
+            required.append("程序")
+        if "真题" in query or "试题" in query or "考试" in query:
+            required.append("真题")
+        return required
+
+    @classmethod
+    def _passes_relevance(cls, searchable: str, query: str, terms: list[str], score: float) -> bool:
+        if score >= 80:
+            return True
+        if cls._is_noise_path(searchable):
+            return False
+        required = cls._required_terms(query, terms)
+        if required and not all(term in searchable for term in required):
+            return False
+        core_terms = [term for term in terms if term not in {"真题", "试题", "考试", "历年"} and len(term) >= 2]
+        if core_terms and not any(term in searchable for term in core_terms):
+            return False
+        return score >= 18
 
     @classmethod
     def _file_url(cls, path: str) -> str:
@@ -99,6 +154,26 @@ class FreshmanMaterialsService:
     def _raw_url(cls, path: str) -> str:
         return f"https://raw.githubusercontent.com/{cls.owner}/{cls.repo}/{cls.branch}/{quote(path)}"
 
+
+    def _cache_updated_at(self) -> float | None:
+        if not self.cache_path.exists():
+            return None
+        try:
+            payload = json.loads(self.cache_path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        try:
+            return float(payload.get("updated_at"))
+        except (TypeError, ValueError):
+            return None
+
+    def _cache_is_stale(self) -> bool:
+        updated_at = self._cache_updated_at()
+        if updated_at is None:
+            return True
+        return (time.time() - updated_at) >= max(60, self.cache_ttl_seconds)
     def _load_cache(self) -> list[dict[str, Any]]:
         if not self.cache_path.exists():
             return []
@@ -156,7 +231,7 @@ class FreshmanMaterialsService:
         if self._tree is None:
             self._tree = self._load_cache()
             self._loaded_at = time.time() if self._tree else None
-        if not self._tree:
+        if not self._tree or self._cache_is_stale():
             try:
                 await self.refresh()
             except Exception as exc:
@@ -194,6 +269,8 @@ class FreshmanMaterialsService:
             "files": len(files),
             "directories": len(dirs),
             "updated_at": updated_at,
+            "cache_ttl_seconds": self.cache_ttl_seconds,
+            "cache_stale": self._cache_is_stale(),
             "loaded_at": self._loaded_at,
             "last_error": self._last_error,
         }
@@ -207,12 +284,13 @@ class FreshmanMaterialsService:
         filename = path.rsplit("/", 1)[-1]
         normalized_filename = cls._normalize_text(filename)
         cleaned_query = cls._normalize_text(query)
-        score = 0.0
+        score = -30.0 if cls._is_noise_path(path) else 0.0
         if cleaned_query and cleaned_query in normalized_path:
             score += 80.0
         if cleaned_query and cleaned_query in normalized_filename:
             score += 120.0
         path_parts = [cls._normalize_text(part) for part in path.split("/") if part]
+        terms = cls._expanded_terms(query, terms)
         for term in terms:
             if term in normalized_filename:
                 score += 16.0 + min(len(term), 12)
@@ -234,9 +312,10 @@ class FreshmanMaterialsService:
         hits: list[FreshmanMaterialHit] = []
         for item in tree:
             score = self._score_item(item, query, terms)
-            if score <= 0:
-                continue
             path = str(item.get("path"))
+            normalized_path = self._normalize_text(path)
+            if score <= 0 or not self._passes_relevance(normalized_path, query, terms, score):
+                continue
             item_type = str(item.get("type") or "")
             html_url = self._file_url(path) if item_type == "blob" else self._tree_url(path)
             hits.append(FreshmanMaterialHit(
@@ -272,9 +351,12 @@ class FreshmanMaterialsService:
         score = max(0.0, 40.0 - rank * 2.0)
         if cleaned_query and cleaned_query in searchable:
             score += 80.0
+        terms = cls._expanded_terms(query, terms)
         for term in terms:
             if term and term in searchable:
                 score += 12.0 + min(len(term), 10)
+        if cls._is_noise_path(searchable):
+            score -= 30.0
         if item_type == "package":
             score += 2.0
         return score
@@ -299,7 +381,8 @@ class FreshmanMaterialsService:
             path = file_name or title or html_url
         detail_parts = [part for part in [category_label, course_name, file_name, description] if part]
         score = cls._score_arxiv_item(item, query, terms, rank, item_type)
-        if score <= 0:
+        searchable = cls._normalize_text(" ".join(detail_parts + [title, path]))
+        if score <= 0 or not cls._passes_relevance(searchable, query, cls._expanded_terms(query, terms), score):
             return None
         return FreshmanMaterialHit(
             path=path,

@@ -1,0 +1,9 @@
+{
+  "name": "yiwen-qa-assistant-local",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local runtime dependencies for the Yiwen QA assistant",
+  "dependencies": {
+    "sysu-anything": "0.1.2"
+  }
+}

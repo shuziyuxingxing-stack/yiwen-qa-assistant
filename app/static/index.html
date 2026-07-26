@@ -1,10 +1,11 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>逸问问答助手</title>
-    <link rel="stylesheet" href="/static/style.css?v=20260704-layout-sysu-materials" />
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/static/style.css?v=20260712-cleanup" />
   </head>
   <body>
     <main class="app-shell">
@@ -13,7 +14,7 @@
           <div class="brand-mark">逸</div>
           <div>
             <h1>逸问问答助手</h1>
-            <p>公共问题使用共享逸问账号；私人事务使用用户自己的中大账号会话。</p>
+            <p>&#20844;&#20849;&#38382;&#31572;&#21644;&#31169;&#20154;&#20107;&#21153;&#37117;&#20351;&#29992;&#24403;&#21069;&#29992;&#25143;&#30340;&#20010;&#20154;&#30331;&#24405;&#24577;&#12290;</p>
           </div>
         </div>
         <section class="identity-panel">
@@ -22,7 +23,7 @@
             <input id="user-id" value="正在创建..." readonly autocomplete="off" />
             <button id="login-button" type="button">重建会话</button>
           </div>
-          <p id="identity-status">本机会话由后端随机生成，只用于隔离本浏览器的聊天和私人绑定；私人事务以用户自己的企业微信扫码登录为准。</p>
+          <p id="identity-status">&#26412;&#26426;&#20250;&#35805;&#29992;&#20110;&#38548;&#31163;&#24403;&#21069;&#27983;&#35272;&#22120;&#65307;&#20844;&#20849;&#38382;&#31572;&#21644;&#31169;&#20154;&#20107;&#21153;&#37117;&#20351;&#29992;&#24403;&#21069;&#29992;&#25143;&#30340;&#20010;&#20154;&#30331;&#24405;&#24577;&#12290;</p>
         </section>
         <section class="mode-panel">
           <h2>服务状态</h2>
@@ -30,18 +31,29 @@
             <span>公共问答</span>
             <strong id="public-status">检测中</strong>
           </div>
+          <div class="private-auth-actions public-auth-actions">
+            <button id="public-login-button" type="button">授权官方逸问</button>
+          </div>
+          <p id="public-auth-status">点击后在独立浏览器窗口完成官方授权，助手会自动读取登录结果。</p>
           <div class="capability pending">
             <span>私人事务</span>
             <strong id="private-status">需要个人登录</strong>
           </div>
           <div class="private-auth-actions">
-            <button id="private-login-button" type="button">企业微信扫码绑定</button>
-            <button id="private-refresh-button" type="button" class="ghost-button">刷新教务会话</button>
+            <button id="private-login-button" type="button">&#20225;&#19994;&#24494;&#20449;&#25195;&#30721;&#32465;&#23450;</button>
+            <button id="private-refresh-button" type="button" class="ghost-button">&#21047;&#26032;&#25945;&#21153;&#20250;&#35805;</button>
           </div>
           <div class="private-auth-panel" id="private-auth-panel" hidden>
             <img id="private-qr" alt="企业微信登录二维码" />
             <p id="private-auth-status">等待生成二维码。</p>
           </div>
+        </section>
+        <section class="history-panel">
+          <div class="history-heading">
+            <h2>&#21382;&#21490;&#23545;&#35805;</h2>
+            <button id="history-refresh-button" type="button" class="ghost-button">&#21047;&#26032;</button>
+          </div>
+          <div id="history-list" class="history-list">&#30331;&#24405;&#21518;&#26174;&#31034;&#24403;&#21069;&#36134;&#21495;&#21382;&#21490;&#12290;</div>
         </section>
       </aside>
 
@@ -82,18 +94,9 @@
         </form>
       </section>
     </main>
-    <script src="/static/app.js?v=20260704-sysu-materials-pages"></script>
+    <script src="/static/app.js?v=20260726-local-auth"></script>
   </body>
 </html>
-
-
-
-
-
-
-
-
-
 
 
 

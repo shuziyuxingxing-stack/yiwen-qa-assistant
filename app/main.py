@@ -1,9 +1,13 @@
-﻿from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 from app.api.routes import router
 from app.services.sysu_anything_chat import sysu_anything_chat
@@ -18,7 +22,7 @@ async def lifespan(app: FastAPI):
         await sysu_anything_chat.stop_keepalive()
 
 
-app = FastAPI(title="Yiwen Gateway POC", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="中大逸问问答助手", version="0.2.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -32,7 +36,9 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 @app.get("/", include_in_schema=False)
 async def index() -> RedirectResponse:
-    return RedirectResponse(url="/static/index.html?v=20260704-sysu-materials-pages")
+    return RedirectResponse(url="/static/index.html?v=20260712-cleanup")
 
-
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon() -> FileResponse:
+    return FileResponse("app/static/favicon.svg", media_type="image/svg+xml")
 

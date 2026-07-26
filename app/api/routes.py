@@ -1,4 +1,4 @@
-﻿import json
+import json
 import time
 from typing import Any
 
@@ -18,6 +18,7 @@ from app.core.models import (
     PersonalQueryRequest,
     PersonalQueryResponse,
     UserProfile,
+    YiwenBrowserImportRequest,
     YiwenCallbackReplayRequest,
 )
 from app.services.chat_service import ChatService
@@ -105,6 +106,20 @@ def build_shared_yiwen_status_payload() -> dict[str, Any]:
         'sysu_anything': sysu_status,
         'legacy_session': legacy_session,
     }
+
+
+def build_private_sysu_status_payload(user_id: str) -> dict[str, Any]:
+    status = private_sysu_auth.status(user_id)
+    effective_user_id, user_state_dir, using_fallback = private_sysu_auth.effective_user_state_dir(user_id)
+    yiwen_status = sysu_anything_chat.status(state_dir=user_state_dir)
+    has_yiwen_chat_auth = bool(yiwen_status.get("configured"))
+    status["has_yiwen_chat_auth"] = has_yiwen_chat_auth
+    status["has_yiwen_public_session"] = has_yiwen_chat_auth
+    status["yiwen_chat_status"] = yiwen_status
+    status["yiwen_state_dir"] = str(user_state_dir)
+    status["yiwen_effective_user_id"] = effective_user_id
+    status["yiwen_using_single_user_fallback"] = using_fallback
+    return status
 
 
 @router.get('/admin/yiwen/shared/status')
@@ -248,6 +263,106 @@ async def shared_yiwen_send_test() -> dict[str, Any]:
         'session': shared_yiwen_manager.to_payload(),
     }
 
+def _current_yiwen_state(resolved_user_id: str):
+    return private_sysu_auth.effective_user_state_dir(resolved_user_id)
+
+
+@router.post('/auth/yiwen/chrome/start')
+async def yiwen_chrome_start(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    resolved_user_id = resolve_user_id(None, authorization)
+    _, user_state_dir, using_fallback = _current_yiwen_state(resolved_user_id)
+    try:
+        result = sysu_anything_chat.launch_chrome_debug(state_dir=user_state_dir)
+    except SysuAnythingCliError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {
+        'system': 'yiwen',
+        'scope': 'private',
+        'user_id': resolved_user_id,
+        'using_single_user_fallback': using_fallback,
+        **result,
+    }
+
+
+@router.post('/auth/yiwen/chrome/import')
+async def yiwen_chrome_import(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    resolved_user_id = resolve_user_id(None, authorization)
+    _, user_state_dir, using_fallback = _current_yiwen_state(resolved_user_id)
+    try:
+        result = await sysu_anything_chat.import_chrome_debug(state_dir=user_state_dir)
+    except SysuAnythingCliError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {
+        'system': 'yiwen',
+        'scope': 'private',
+        'user_id': resolved_user_id,
+        'using_single_user_fallback': using_fallback,
+        'status': 'imported-from-chrome-debug',
+        'result': result,
+        'sysu_anything': sysu_anything_chat.status(state_dir=user_state_dir),
+    }
+
+
+@router.post('/auth/yiwen/browser/import')
+async def yiwen_browser_import(payload: YiwenBrowserImportRequest, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    resolved_user_id = resolve_user_id(None, authorization)
+    _, user_state_dir, using_fallback = _current_yiwen_state(resolved_user_id)
+    auth_state = sysu_anything_chat.save_browser_auth(
+        token=payload.token,
+        username=payload.username,
+        real_name=payload.real_name,
+        state_dir=user_state_dir,
+    )
+    imported_cookies = None
+    if payload.cookies:
+        try:
+            imported_cookies = await sysu_anything_chat.import_browser_cookies(cookies=payload.cookies, state_dir=user_state_dir)
+        except SysuAnythingCliError:
+            imported_cookies = None
+    try:
+        validation = await sysu_anything_chat.validate_auth(agent_id=DEFAULT_AGENT_ID, state_dir=user_state_dir)
+    except SysuAnythingCliError as exc:
+        raise HTTPException(status_code=502, detail=f'逸问 token 已保存，但校验失败：{exc}') from exc
+    return {
+        'system': 'yiwen',
+        'scope': 'private',
+        'user_id': resolved_user_id,
+        'using_single_user_fallback': using_fallback,
+        'status': 'imported-from-user-browser',
+        'username': auth_state.get('username'),
+        'real_name': auth_state.get('realName'),
+        'jwt_expires_at': auth_state.get('jwtExpiresAt'),
+        'validation': validation,
+        'imported_cookies': imported_cookies,
+        'sysu_anything': sysu_anything_chat.status(state_dir=user_state_dir),
+    }
+@router.post('/auth/yiwen/keepalive')
+async def yiwen_keepalive(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    resolved_user_id = resolve_user_id(None, authorization)
+    _, user_state_dir, using_fallback = _current_yiwen_state(resolved_user_id)
+    if not sysu_anything_chat.has_auth(user_state_dir):
+        raise HTTPException(status_code=400, detail="尚未完成官方逸问授权，请点击“授权官方逸问”。")
+    try:
+        result = await sysu_anything_chat.validate_auth(agent_id=DEFAULT_AGENT_ID, state_dir=user_state_dir)
+    except SysuAnythingCliError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {
+        'system': 'yiwen',
+        'scope': 'private',
+        'user_id': resolved_user_id,
+        'using_single_user_fallback': using_fallback,
+        'status': 'alive',
+        'ok': True,
+        'validation': result,
+        'sysu_anything': sysu_anything_chat.status(state_dir=user_state_dir),
+    }
+
+
+@router.post('/auth/yiwen/send-test')
+async def yiwen_send_test(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    # Backward-compatible endpoint for cached older frontends. It intentionally
+    # performs only token validation and does not send any chat question.
+    return await yiwen_keepalive(authorization)
 
 @router.get('/admin/yiwen/shared/login.json')
 async def shared_yiwen_login_json() -> dict[str, str]:
@@ -446,7 +561,6 @@ async def me(authorization: str | None = Header(default=None)) -> UserProfile:
         created_at=account.created_at,
         last_seen_at=account.last_seen_at,
     )
-
 
 @router.post('/chat', response_model=ChatResponse)
 async def chat(payload: ChatRequest, authorization: str | None = Header(default=None)) -> ChatResponse:
@@ -716,6 +830,23 @@ async def private_capabilities() -> dict[str, Any]:
             },
         ],
     }
+@router.get('/me/yiwen/status')
+async def me_yiwen_status(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    resolved_user_id = resolve_user_id(None, authorization)
+    effective_user_id, user_state_dir, using_fallback = private_sysu_auth.effective_user_state_dir(resolved_user_id)
+    status = sysu_anything_chat.status(state_dir=user_state_dir)
+    return {
+        'system': 'yiwen',
+        'scope': 'private',
+        'user_id': resolved_user_id,
+        'effective_user_id': effective_user_id,
+        'using_single_user_fallback': using_fallback,
+        'has_session': bool(status.get('configured')),
+        'has_yiwen_chat_auth': bool(status.get('configured')),
+        'has_chat_auth': bool(status.get('configured')),
+        'message': '逸问已授权' if status.get('configured') else '需要完成官方逸问授权',
+        'yiwen_chat_status': status,
+    }
 
 @router.get('/me/private/{system}/status')
 async def private_system_status(
@@ -725,7 +856,7 @@ async def private_system_status(
 ) -> dict[str, Any]:
     resolved_user_id = resolve_user_id(None, authorization)
     if system == 'sysu':
-        return private_sysu_auth.status(resolved_user_id)
+        return build_private_sysu_status_payload(resolved_user_id)
     status = chat_service.private.sessions.status(resolved_user_id, system)
     if system in {'libic', 'jwxt'}:
         private_status = private_sysu_auth.status(resolved_user_id)
@@ -746,7 +877,7 @@ async def private_auth_start(
 ) -> dict[str, Any]:
     resolved_user_id = resolve_user_id(None, authorization)
     if system == 'sysu':
-        return private_sysu_auth.status(resolved_user_id)
+        return build_private_sysu_status_payload(resolved_user_id)
     if system == 'libic':
         return {
             'system': 'libic',
@@ -796,15 +927,16 @@ async def private_libic_import_sysu_anything(
 async def private_workwechat_start(authorization: str | None = Header(default=None)) -> dict[str, Any]:
     resolved_user_id = resolve_user_id(None, authorization)
     try:
-        return private_sysu_auth.start_workwechat_login(resolved_user_id)
+        private_sysu_auth.start_workwechat_login(resolved_user_id)
     except PrivateSysuAuthError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return build_private_sysu_status_payload(resolved_user_id)
 
 
 @router.get('/auth/private/sysu/workwechat/status')
 async def private_workwechat_status(authorization: str | None = Header(default=None)) -> dict[str, Any]:
     resolved_user_id = resolve_user_id(None, authorization)
-    return private_sysu_auth.status(resolved_user_id)
+    return build_private_sysu_status_payload(resolved_user_id)
 
 
 @router.get('/auth/private/sysu/workwechat/qr')
@@ -814,6 +946,7 @@ async def private_workwechat_qr(authorization: str | None = Header(default=None)
     if not qr_file:
         raise HTTPException(status_code=404, detail='workwechat QR is not ready')
     return FileResponse(qr_file, media_type='image/png')
+
 
 
 @router.post('/auth/private/sysu/jwxt/refresh')
@@ -912,9 +1045,145 @@ async def me_status(
             'message': '当前还没有真实会话存储与检查逻辑。',
         }
 
-    status = session_store.get_yiwen_status(resolved_user_id)
-    status['system'] = 'yiwen'
-    return status
+    effective_user_id, user_state_dir, using_fallback = private_sysu_auth.effective_user_state_dir(resolved_user_id)
+    status = sysu_anything_chat.status(state_dir=user_state_dir)
+    has_cas_session = private_sysu_auth.has_cas_session(resolved_user_id)
+    return {
+        'system': 'yiwen',
+        'scope': 'private',
+        'user_id': resolved_user_id,
+        'effective_user_id': effective_user_id,
+        'using_single_user_fallback': using_fallback,
+        'has_session': bool(status.get('configured')),
+        'has_yiwen_chat_auth': bool(status.get('configured')),
+        'has_cas_session': has_cas_session,
+        'has_chat_auth': bool(status.get('configured')),
+        'message': '逸问已授权' if status.get('configured') else '需要完成官方逸问授权',
+        'yiwen_chat_status': status,
+    }
+
+
+@router.get('/me/yiwen/chats')
+async def me_yiwen_chats(
+    authorization: str | None = Header(default=None),
+    keyword: str | None = Query(default=None),
+    limit: int = Query(default=20, ge=1, le=50),
+) -> dict[str, Any]:
+    resolved_user_id = resolve_user_id(None, authorization)
+    effective_user_id, user_state_dir, using_fallback = private_sysu_auth.effective_user_state_dir(resolved_user_id)
+    if not sysu_anything_chat.has_auth(user_state_dir):
+        return {
+            'system': 'yiwen',
+            'scope': 'private',
+            'user_id': resolved_user_id,
+            'effective_user_id': effective_user_id,
+            'using_single_user_fallback': using_fallback,
+            'items': [],
+            'message': '完成官方逸问授权后显示当前账号历史。',
+        }
+    try:
+        items = await sysu_anything_chat.list_chats(keyword=keyword, size=limit, state_dir=user_state_dir)
+    except SysuAnythingCliError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {
+        'system': 'yiwen',
+        'scope': 'private',
+        'user_id': resolved_user_id,
+        'effective_user_id': effective_user_id,
+        'using_single_user_fallback': using_fallback,
+        'items': [
+            {
+                'chat_id': item.chat_id,
+                'title': item.title,
+                'agent_name': item.agent_name,
+                'updated_at': item.updated_at,
+            }
+            for item in items
+        ],
+    }
+
+
+def _clean_history_content(value: Any) -> str:
+    if isinstance(value, dict):
+        value = value.get('content') or value.get('text') or value.get('message') or ''
+    if not isinstance(value, str):
+        return ''
+    text = ' '.join(value.split())
+    for marker in ('以下是本助手检索到的', '以下是本助手辅助知识库', '[内置辅助知识库命中]', '[外部辅助知识库命中]'):
+        index = text.find(marker)
+        if index > 0:
+            text = text[:index].strip()
+    return text
+
+
+def _normalize_yiwen_messages(record: dict[str, Any], index: int) -> list[dict[str, Any]]:
+    input_text = _clean_history_content(record.get('inputContent'))
+    output_text = ''
+    output = record.get('outputContent')
+    if isinstance(output, dict):
+        choices = output.get('choices')
+        if isinstance(choices, list):
+            parts = []
+            for choice in choices:
+                if isinstance(choice, dict) and isinstance(choice.get('content'), str):
+                    parts.append(choice['content'])
+            output_text = ''.join(parts).strip()
+        output_text = output_text or _clean_history_content(output.get('content'))
+    else:
+        output_text = _clean_history_content(output)
+    items: list[dict[str, Any]] = []
+    if input_text:
+        items.append({'role': 'user', 'content': input_text, 'index': index, 'raw': record})
+    if output_text:
+        items.append({'role': 'assistant', 'content': output_text, 'index': index, 'raw': record})
+    if items:
+        return items
+    for key in ('question', 'content', 'message', 'text'):
+        text = _clean_history_content(record.get(key))
+        if text:
+            role = str(record.get('role') or record.get('messageType') or record.get('type') or '').lower()
+            normalized_role = 'assistant' if any(token in role for token in ('assistant', 'answer', 'output')) else 'user'
+            return [{'role': normalized_role, 'content': text, 'index': index, 'raw': record}]
+    return []
+
+
+@router.get('/me/yiwen/chats/{chat_id}/messages')
+async def me_yiwen_chat_messages(
+    chat_id: str,
+    authorization: str | None = Header(default=None),
+    limit: int = Query(default=50, ge=1, le=100),
+) -> dict[str, Any]:
+    resolved_user_id = resolve_user_id(None, authorization)
+    effective_user_id, user_state_dir, using_fallback = private_sysu_auth.effective_user_state_dir(resolved_user_id)
+    if not sysu_anything_chat.has_auth(user_state_dir):
+        return {
+            'system': 'yiwen',
+            'scope': 'private',
+            'user_id': resolved_user_id,
+            'effective_user_id': effective_user_id,
+            'using_single_user_fallback': using_fallback,
+            'chat_id': chat_id,
+            'items': [],
+            'message': '完成官方逸问授权后才能读取历史消息。',
+        }
+    try:
+        records = await sysu_anything_chat.list_messages(chat_id=chat_id, size=limit, state_dir=user_state_dir)
+    except SysuAnythingCliError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    items = []
+    for index, record in enumerate(records):
+        if isinstance(record, dict):
+            items.extend(_normalize_yiwen_messages(record, index))
+    return {
+        'system': 'yiwen',
+        'scope': 'private',
+        'user_id': resolved_user_id,
+        'effective_user_id': effective_user_id,
+        'using_single_user_fallback': using_fallback,
+        'chat_id': chat_id,
+        'items': items,
+        'raw_count': len(records),
+    }
 
 @router.get('/official/interfaces')
 async def official_interfaces() -> dict[str, Any]:
@@ -928,6 +1197,9 @@ async def official_interfaces() -> dict[str, Any]:
         {'key': 'jwxt_leave_apply', 'system': 'jwxt', 'title': '本人请假申请预览/确认提交', 'auth_required': True, 'channel': 'private', 'sample_prompt': '申请请假：病假，2026-07-08 全天，说明发烧去校医院，附件 C:\\tmp\\proof.png', 'upstream_basis': 'sysu-anything jwxt leave apply 默认预览；只有用户明确“确认提交请假申请”才追加 --confirm'},
         {'key': 'jwxt_grade', 'system': 'jwxt', 'title': '本人成绩/绩点/学分', 'auth_required': True, 'channel': 'private', 'sample_prompt': '查询我2025-2026学年第二学期主修成绩', 'upstream_basis': '本项目补充：复用 SYSU-Anything CAS/JWXT 会话，对齐官方 studentWeb stuAchievementView；调用 GET /achievement-manage/score-check/checkStuStatus、/getPull、/list、/getSortByYear、/stuCreditSitlist、/getPicPie'},
         {'key': 'jwxt_exam', 'system': 'jwxt', 'title': '本人考试信息/期末考试安排', 'auth_required': True, 'channel': 'private', 'sample_prompt': '查询我的期末考试课表', 'upstream_basis': '本项目补充：复用 SYSU-Anything CAS/JWXT 会话，直接调用 GET /schedule/agg/commonScheduleExamTime/queryExamWeekName 与 POST /examination-manage/classroomResource/queryStuEaxmInfo；只有官方接口成功响应才返回个人考试数据'},
+        {'key': 'jwxt_classroom_check', 'system': 'jwxt', 'title': '教室上课情况/空闲教室查询', 'auth_required': True, 'channel': 'private', 'sample_prompt': '查询明天公教楼第1-2节空闲教室', 'upstream_basis': '本项目补充：复用 SYSU-Anything CAS/JWXT 会话，对齐官方 classroomCheckStu 页面；调用 POST /schedule/agg/classroomOccupy/pageCheckList，只返回官方接口成功响应'},
+        {'key': 'jwxt_notice_jwc', 'system': 'jwxt', 'title': '教务部公告', 'auth_required': True, 'channel': 'private', 'sample_prompt': '教务部最近发了什么公告', 'upstream_basis': '本项目补充：对齐官方 /#/notice/0；调用 GET /system-manage/info-delivery?column=01&deliveryObject=02&status=1&resourceCode=jwgld'},
+        {'key': 'jwxt_notice_department', 'system': 'jwxt', 'title': '学院/院系公告', 'auth_required': True, 'channel': 'private', 'sample_prompt': '查询数学学院最近发了什么公告', 'upstream_basis': '本项目补充：对齐官方 /#/notice/1；调用 GET /system-manage/info-delivery?column=02&deliveryObject=02&status=1&resourceCode=jwgld，并按发布院系/学院字段做本地筛选'},
         {'key': 'gym_available', 'system': 'gym', 'title': '体育场馆空位/预约预览', 'auth_required': True, 'channel': 'private', 'sample_prompt': '查询明天羽毛球空位', 'upstream_basis': 'sysu-anything gym available --venue-type 羽毛球 --json'},
         {'key': 'usc_classroom_rooms', 'system': 'usc', 'title': 'USC/BPM 可用课室', 'auth_required': True, 'channel': 'private', 'sample_prompt': '查询明天珠海校区第1-2节可用课室', 'upstream_basis': 'sysu-anything usc classroom rooms --date <date> --section-start 1 --section-end 2 --campus 珠海校区 --json'},
         {'key': 'xgxt_workstudy_records', 'system': 'xgxt', 'title': '勤工助学岗位/本人申请记录', 'auth_required': True, 'channel': 'private', 'sample_prompt': '查询我的勤工助学申请记录', 'upstream_basis': 'sysu-anything xgxt workstudy records --state-dir <user-state> --json'},
@@ -1007,17 +1279,6 @@ async def official_probe(
         'errors': sum(1 for item in results if item['status'] == 'error'),
         'results': results,
     }
-
-
-
-
-
-
-
-
-
-
-
 
 
 

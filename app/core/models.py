@@ -1,4 +1,6 @@
-﻿from typing import Literal
+from __future__ import annotations
+
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -36,8 +38,19 @@ class UserProfile(BaseModel):
     created_at: float
     last_seen_at: float
 
+
 class YiwenCallbackReplayRequest(BaseModel):
     callback_url: str | None = None
+
+
+class YiwenBrowserImportRequest(BaseModel):
+    token: str = Field(..., min_length=16)
+    username: str | None = None
+    real_name: str | None = None
+    cookies: list[dict[str, object]] | None = None
+
+
+
 class AnswerSource(BaseModel):
     type: SourceType
     title: str
@@ -103,6 +116,4 @@ class KbSearchHitResponse(KbDocumentResponse):
 class KbSearchResponse(BaseModel):
     query: str
     hits: list[KbSearchHitResponse]
-
-
 

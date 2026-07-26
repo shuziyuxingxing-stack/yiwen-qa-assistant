@@ -10,6 +10,8 @@ from pathlib import Path
 from threading import RLock
 from typing import Any
 
+from app.core.runtime import PROJECT_ROOT, resolve_sysu_anything_cli
+
 
 class PrivateSysuAuthError(RuntimeError):
     pass
@@ -17,13 +19,13 @@ class PrivateSysuAuthError(RuntimeError):
 
 class PrivateSysuAuthService:
     def __init__(self) -> None:
-        self.project_root = Path(__file__).resolve().parents[2]
+        self.project_root = PROJECT_ROOT
         self.base_state_dir = self.project_root / ".state" / "private-users"
         self.base_state_dir.mkdir(parents=True, exist_ok=True)
-        self.cli_path = Path(os.getenv("SYSU_ANYTHING_CLI", r"C:\Users\86152\AppData\Local\Temp\package\bin\sysu-anything.js"))
+        self.cli_path = resolve_sysu_anything_cli()
         self.node_bin = os.getenv("SYSU_ANYTHING_NODE", "node")
         self.default_service_url = os.getenv("PRIVATE_SYSU_SERVICE_URL", "https://jwxt.sysu.edu.cn/jwxt/")
-        self.single_user_fallback = os.getenv("PRIVATE_SYSU_SINGLE_USER_FALLBACK", "1").strip().lower() not in {"0", "false", "no"}
+        self.single_user_fallback = os.getenv("PRIVATE_SYSU_SINGLE_USER_FALLBACK", "0").strip().lower() not in {"0", "false", "no"}
         self._lock = RLock()
         self._processes: dict[str, subprocess.Popen] = {}
         self._started_at: dict[str, float] = {}

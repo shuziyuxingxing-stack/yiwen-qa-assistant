@@ -1,4 +1,6 @@
-﻿import re
+import re
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from app.adapters.sysu_anything import SysuAnythingAdapter
 from app.adapters.yiwen import YiwenAdapter, YiwenResult
@@ -8,7 +10,7 @@ from app.services.external_rag import ExternalRagHit, external_rag_service
 from app.services.freshman_materials import freshman_materials_service
 from app.services.session_store import SessionStore
 from app.services.supplement_kb import KbSearchHit, SupplementKbService
-from app.services.shared_yiwen import get_shared_default_agent_id, shared_yiwen_manager
+from app.services.private_sysu_auth import private_sysu_auth
 from app.services.sysu_anything_chat import SysuAnythingCliError, sysu_anything_chat
 
 
@@ -25,8 +27,12 @@ CHANNEL_TITLES = {
     "web_search": "联网搜索",
     "model": "模型问答",
     "private": "私人事务",
+    "freshman_materials": "中大真题资料查询",
     "auto": "自动路由",
 }
+
+DEFAULT_YIWEN_AGENT_ID = "619ae0c8ffb246d9b669017763359b81"
+
 
 EXTERNAL_RAG_TRIGGER_KEYWORDS = (
     "外部知识库",
@@ -83,19 +89,31 @@ class ChatService:
         self.supplement_kb = supplement_kb or SupplementKbService()
         self.external_rag = external_rag_service
 
+
+    @staticmethod
+    def _current_time_context() -> str:
+        now = datetime.now(ZoneInfo("Asia/Shanghai"))
+        return f"当前日期是 {now:%Y-%m-%d}，当前时间是 {now:%Y-%m-%d %H:%M:%S}（Asia/Shanghai）。涉及今天、最近、近期、今年、当前政策或新闻的问题，必须以这个日期为准，不要沿用模型内置旧日期。"
+
+    @classmethod
+    def _with_time_context(cls, message: str) -> str:
+        return f"{cls._current_time_context()}\n\n用户问题：{message}"
+
     async def _query_yiwen(self, payload: ChatRequest) -> tuple[str, list[ChatAction], YiwenResult | None, str | None]:
         upstream_chat_id = payload.chat_id
-        resolved_agent_id = payload.agent_id or get_shared_default_agent_id() or "default"
+        user_id = payload.user_id or ""
+        _, user_state_dir, _ = private_sysu_auth.effective_user_state_dir(user_id)
+        resolved_agent_id = payload.agent_id or DEFAULT_YIWEN_AGENT_ID
 
-        if not sysu_anything_chat.has_auth():
+        if not sysu_anything_chat.has_auth(user_state_dir):
             return (
-                "公共逸问共享账号尚未完成 SYSU-Anything 登录导入。管理员需要打开 /admin/yiwen/shared/login，按页面启动官方逸问登录窗口并导入登录态。",
+                "公共问答需要当前用户先完成官方逸问授权。",
                 [
                     ChatAction(
-                        type="auth",
+                        type="authorize_yiwen",
                         system="yiwen",
                         needed=True,
-                        message="缺少 SYSU-Anything chat-auth.json，公共问答暂不可用。普通用户不需要处理 token/cookie。",
+                        message="请点击左侧“授权官方逸问”，在打开的官方页面完成授权。",
                     )
                 ],
                 None,
@@ -104,35 +122,31 @@ class ChatService:
 
         try:
             result = await sysu_anything_chat.send_with_recovery(
-                message=payload.message,
+                message=self._with_time_context(payload.message),
                 chat_id=upstream_chat_id,
                 agent_id=resolved_agent_id,
                 model=payload.model,
                 search_source=payload.search_source,
+                state_dir=user_state_dir,
             )
             effective_chat_id = result.chat_id or upstream_chat_id
-            if effective_chat_id:
-                shared_yiwen_manager.set_runtime_chat_id(effective_chat_id)
-            shared_yiwen_manager.mark_success(effective_chat_id)
-            answer = result.answer or "逸问返回成功，但当前响应内容为空。"
+            answer = result.answer or "逸问请求成功，但返回内容为空。"
             return answer, [], None, effective_chat_id
         except SysuAnythingCliError as exc:
-            shared_yiwen_manager.mark_failure(exc)
             return (
-                f"SYSU-Anything 调用逸问失败：{exc}",
+                f"当前用户的逸问授权不可用或已过期：{exc}",
                 [
                     ChatAction(
-                        type="refresh_shared_yiwen",
+                        type="authorize_yiwen",
                         system="yiwen",
                         needed=True,
-                        message="共享逸问登录态不可用或已失效。请管理员通过 /admin/yiwen/shared/login 重新导入官方登录态。",
+                        message="请重新点击左侧“授权官方逸问”，在官方页面完成授权。",
                     )
                 ],
                 None,
                 upstream_chat_id,
             )
         except Exception as exc:
-            shared_yiwen_manager.mark_failure(exc)
             return (
                 f"公共逸问上游连接失败：{exc}",
                 [
@@ -140,7 +154,7 @@ class ChatService:
                         type="retry",
                         system="yiwen",
                         needed=True,
-                        message="后端调用 SYSU-Anything 失败，请检查本地服务日志。",
+                        message="后端调用当前用户的逸问会话失败，请检查本地服务日志。",
                     )
                 ],
                 None,
@@ -389,14 +403,3 @@ class ChatService:
             ],
             actions=public_actions + [self._private_action(private_result)],
         )
-
-
-
-
-
-
-
-
-
-
-

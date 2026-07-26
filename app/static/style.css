@@ -1,4 +1,4 @@
-﻿* {
+* {
   box-sizing: border-box;
 }
 
@@ -579,4 +579,69 @@ textarea {
 
 
 
+
+
+.history-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.history-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.history-heading h2 {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.history-heading button {
+  height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.history-list {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.history-item {
+  width: 100%;
+  height: auto;
+  min-height: 34px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: white;
+  color: var(--ink);
+  text-align: left;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.history-item:hover {
+  background: var(--ok-bg);
+  color: var(--ink);
+}
+
+.message-actions {
+  display: flex;
+  gap: 8px;
+  padding: 0 4px;
+}
+
+.message-download {
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 6px;
+  font-size: 12px;
+}
 

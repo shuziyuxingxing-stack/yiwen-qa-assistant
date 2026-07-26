@@ -1128,6 +1128,360 @@ class SysuAnythingPrivateConnector:
         ordered = normal_weeks + makeup_weeks
         return ordered[:12]
 
+    @staticmethod
+    def _strip_html(value: str) -> str:
+        text = re.sub(r"<script[\s\S]*?</script>", " ", value, flags=re.IGNORECASE)
+        text = re.sub(r"<style[\s\S]*?</style>", " ", text, flags=re.IGNORECASE)
+        text = re.sub(r"<[^>]+>", " ", text)
+        text = text.replace("&nbsp;", " ").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+        return re.sub(r"\s+", " ", text).strip()
+
+    @staticmethod
+    def _extract_notice_title_query(question: str) -> str | None:
+        match = re.search(r"(?:主题为|标题为|题为|搜索|查询|关于|有关)\s*[\"'“”《》]?([^\"'“”《》，。！？?]{2,40})", question)
+        if match:
+            value = match.group(1).strip(" ，。！？?：:")
+            for suffix in ("的公告", "公告", "通知", "的内容", "内容", "详情"):
+                if value.endswith(suffix):
+                    value = value[: -len(suffix)]
+            if value and not SysuAnythingPrivateConnector._looks_like_notice_department(value):
+                return value.strip() or None
+        quoted = re.search(r"[\"“《](.+?)[\"”》]", question)
+        return quoted.group(1).strip() if quoted else None
+
+    @staticmethod
+    def _looks_like_notice_department(value: str) -> bool:
+        generic = {"学院", "院系", "院系公告", "学院公告", "教务部", "教务"}
+        text = value.strip(" ，。！？?：:")
+        return text not in generic and any(text.endswith(suffix) for suffix in ("学院", "系", "中心", "书院", "医院", "研究院", "直属单位", "部门"))
+
+    @classmethod
+    def _extract_notice_department_query(cls, question: str) -> str | None:
+        patterns = (
+            r"([\u4e00-\u9fa5A-Za-z0-9·（）()]{2,30}(?:学院|系|中心|书院|医院|研究院|直属单位|部门))\s*的?\s*(?:院系|学院)?公告",
+            r"([\u4e00-\u9fa5A-Za-z0-9·（）()]{2,30}(?:学院|系|中心|书院|医院|研究院|直属单位|部门)).{0,12}公告",
+            r"(?:院系|学院)公告.*?(?:查询|搜索|筛选|来自|发布单位为|发布单位是)\s*([\u4e00-\u9fa5A-Za-z0-9·（）()]{2,30})",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, question)
+            if match:
+                value = match.group(1).strip(" ，。！？?：:")
+                if cls._looks_like_notice_department(value):
+                    return value
+        return None
+
+    @staticmethod
+    def _notice_record_matches_department(item: dict[str, Any], department_query: str) -> bool:
+        fields = (
+            "publisher",
+            "createUserName",
+            "departmentName",
+            "deptName",
+            "collegeName",
+            "orgName",
+            "publishDeptName",
+            "deliveryDeptName",
+            "title",
+            "noticeTitle",
+            "name",
+        )
+        return any(department_query in str(item.get(field) or "") for field in fields)
+
+    @staticmethod
+    def _extract_classroom_text(question: str) -> tuple[str | None, str | None]:
+        quoted = re.search(r"[\"“《](.+?)[\"”》]", question)
+        if quoted:
+            value = quoted.group(1).strip()
+            if any(token in value for token in ("楼", "栋", "馆")):
+                return value, None
+            return None, value
+        room_match = re.search(r"([A-Za-z]?\d{3,4}[A-Za-z]?|[A-Za-z]+[- ]?\d{3,4}|[一二三四五六七八九十百千万]+\s*(?:室|课室|教室))", question)
+        building_match = re.search(r"([\u4e00-\u9fa5A-Za-z0-9]{1,16}(?:教学楼|公教楼|楼|栋|馆))", question)
+        building = building_match.group(1).strip() if building_match else None
+        room = room_match.group(1).replace(" ", "") if room_match else None
+        return building, room
+
+    @staticmethod
+    def _extract_records(payload: Any) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        seen: set[str] = set()
+
+        def walk(value: Any) -> None:
+            if isinstance(value, dict):
+                if any(key in value for key in ("title", "campus", "teachingBuild", "classroomNum", "date", "oneSection")):
+                    key = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+                    if key not in seen:
+                        seen.add(key)
+                        records.append(value)
+                for child in value.values():
+                    walk(child)
+            elif isinstance(value, list):
+                for child in value:
+                    walk(child)
+
+        walk(payload)
+        return records
+
+    @classmethod
+    def _summarize_notice_payload(cls, notice_type: str, list_item: dict[str, Any], detail_item: dict[str, Any] | None, title_query: str | None, department_query: str | None = None) -> str:
+        label = "教务部公告" if notice_type == "0" else "院系公告"
+        payload = list_item.get("payload")
+        records = cls._extract_records(payload)
+        if title_query:
+            filtered = [item for item in records if title_query in str(item.get("title") or item.get("noticeTitle") or item.get("name") or "")]
+            records = filtered or records
+        if department_query:
+            filtered = [item for item in records if cls._notice_record_matches_department(item, department_query)]
+            records = filtered
+        lines = [f"已通过 JWXT 官方公告接口查询{label}。"]
+        if title_query:
+            lines.append(f"检索标题关键词：{title_query}")
+        if department_query:
+            lines.append(f"筛选发布院系/学院：{department_query}")
+        if not records:
+            lines.append("当前条件下没有查到公告记录。")
+            return "\n".join(lines)
+        lines.append("")
+        lines.append(f"公告列表：共解析到 {len(records)} 条，先显示前 {min(len(records), 8)} 条。")
+        for index, item in enumerate(records[:8], start=1):
+            title = item.get("title") or item.get("noticeTitle") or item.get("name") or "未命名公告"
+            publish_time = item.get("publishTime") or item.get("releaseTime") or item.get("createTime") or item.get("updateTime")
+            publisher = item.get("publisher") or item.get("createUserName") or item.get("departmentName") or item.get("deptName") or item.get("collegeName") or item.get("orgName") or item.get("publishDeptName")
+            detail = " | ".join(str(value) for value in (publish_time, publisher) if value not in {None, ""})
+            lines.append(f"{index}. {title}" + (f" | {detail}" if detail else ""))
+        if detail_item and cls._payload_success(detail_item):
+            detail_text = cls._strip_html(str(detail_item.get("payload", {}).get("data") or detail_item.get("payload") or ""))
+            if detail_text:
+                lines.append("")
+                lines.append("首条公告详情摘录：")
+                lines.append(detail_text[:900] + ("..." if len(detail_text) > 900 else ""))
+        return "\n".join(lines)
+
+    @classmethod
+    def _summarize_classroom_payload(cls, item: dict[str, Any], param: dict[str, Any]) -> str:
+        records = cls._extract_records(item.get("payload"))
+        lines = ["已通过该用户自己的 JWXT 登录态调用官方“教室上课情况及空闲教室查询”接口。"]
+        filters = []
+        for key, label in (("dateA", "开始日期"), ("dateB", "结束日期"), ("sectionA", "开始节次"), ("sectionB", "结束节次"), ("teachingBuildID", "教学楼"), ("classroomID", "教室"), ("checkType", "查询类别")):
+            value = param.get(key)
+            if value not in {None, ""}:
+                if key == "checkType":
+                    value = "空闲教室" if str(value) == "2" else "被占用教室"
+                filters.append(f"{label}={value}")
+        if filters:
+            lines.append("查询条件：" + "；".join(filters))
+        if not records:
+            lines.append("官方接口已响应，但当前条件下没有返回教室记录。")
+            return "\n".join(lines)
+        section_keys = [
+            ("oneSection", "1"), ("twoSection", "2"), ("threeSection", "3"), ("fourSection", "4"),
+            ("fiveSection", "5"), ("sixSection", "6"), ("sevenSection", "7"), ("eightSection", "8"),
+            ("nineSection", "9"), ("tenSection", "10"), ("elevenSection", "11"), ("twelveSection", "12"),
+            ("thirteenSection", "13"), ("fourteenSection", "14"), ("fifteenSection", "15"), ("sixteenSection", "16"),
+        ]
+        lines.append("")
+        lines.append(f"教室记录：共解析到 {len(records)} 条，先显示前 {min(len(records), 10)} 条。")
+        for index, record in enumerate(records[:10], start=1):
+            room = record.get("classroomNum") or record.get("classroomCode") or record.get("classroomName") or record.get("classroomID") or "未命名教室"
+            building = record.get("teachingBuild") or record.get("teachingBuildNum") or record.get("buildingName")
+            campus = record.get("campus") or record.get("campusName")
+            date = record.get("date")
+            occupied = []
+            for key, label in section_keys:
+                value = record.get(key)
+                if isinstance(value, dict) and value.get("occupyReason"):
+                    occupied.append(f"第{label}节:{value.get('occupyReason')}")
+                elif isinstance(value, str) and value.strip():
+                    occupied.append(f"第{label}节:{value.strip()}")
+            detail = " | ".join(str(value) for value in (campus, building, date) if value not in {None, ""})
+            if occupied:
+                detail = (detail + " | " if detail else "") + "；".join(occupied[:5])
+            lines.append(f"{index}. {room}" + (f" | {detail}" if detail else ""))
+        if len(records) > 10:
+            lines.append(f"其余 {len(records) - 10} 条已省略。")
+        return "\n".join(lines)
+
+    async def _request_jwxt_public_json(self, client: httpx.AsyncClient, pathname: str, params: dict[str, Any], *, referer: str) -> dict[str, Any]:
+        headers = {
+            "Accept": "application/json, text/plain, */*",
+            "Referer": referer,
+            "X-Requested-With": "XMLHttpRequest",
+            "lastAccessTime": str(int(time.time() * 1000)),
+        }
+        response = await client.get(pathname, params=params, headers=headers)
+        item: dict[str, Any] = {
+            "method": "GET",
+            "path": pathname,
+            "params": params,
+            "status_code": response.status_code,
+            "content_type": response.headers.get("content-type", ""),
+        }
+        if response.status_code in {401, 403}:
+            item["auth_failed"] = True
+        if "json" not in item["content_type"]:
+            item["text_preview"] = response.text[:300]
+            return item
+        try:
+            item["payload"] = response.json()
+        except ValueError:
+            item["text_preview"] = response.text[:300]
+        return item
+
+    async def _query_jwxt_notice(self, user_id: str, question: str, notice_type: str) -> PrivateQueryResult:
+        label = "教务部公告" if notice_type == "0" else "院系公告"
+        command = ["jwxt", "notice", notice_type]
+        if not private_sysu_auth.has_cas_session(user_id):
+            return self._login_required("jwxt", f"jwxt_notice_{notice_type}", command)
+        _, state_dir, using_fallback = private_sysu_auth.effective_user_state_dir(user_id)
+        session_file = state_dir / "jwxt-session.json"
+        if not session_file.exists():
+            return PrivateQueryResult(
+                answer=f"已完成企业微信/CAS 登录，但尚未生成 JWXT 业务会话，不能查询{label}。请先刷新教务业务会话。",
+                system="jwxt",
+                needs_relogin=True,
+                intent=f"jwxt_notice_{notice_type}",
+                next_action="refresh_jwxt_session",
+                raw={"session_file_exists": False, "using_single_user_fallback": using_fallback},
+            )
+        column = "01" if notice_type == "0" else "02"
+        title_query = self._extract_notice_title_query(question)
+        department_query = self._extract_notice_department_query(question) if notice_type == "1" else None
+        limit = int(self._extract_limit(question, "8"))
+        params: dict[str, Any] = {"column": column, "deliveryObject": "02", "status": 1, "resourceCode": "jwgld"}
+        if title_query:
+            params["title"] = title_query
+        referer = f"{self.JWXT_BASE_URL}/#/notice/{notice_type}"
+        attempts: list[dict[str, Any]] = []
+        detail_item: dict[str, Any] | None = None
+        async with httpx.AsyncClient(base_url=self.JWXT_BASE_URL, timeout=15.0, follow_redirects=True) as client:
+            list_item = await self._request_jwxt_json(client, session_file, "/system-manage/info-delivery", params, menu_id="jwgld_gg", referer=referer)
+            attempts.append(list_item)
+            records = self._extract_records(list_item.get("payload")) if self._payload_success(list_item) else []
+            if title_query:
+                matched = [item for item in records if title_query in str(item.get("title") or item.get("noticeTitle") or item.get("name") or "")]
+                if matched:
+                    records = matched
+            if department_query:
+                records = [item for item in records if self._notice_record_matches_department(item, department_query)]
+            wants_detail = title_query or department_query or self._contains_any(question, ("详情", "内容", "全文", "说了什么"))
+            if wants_detail and records:
+                first_id = records[0].get("id") or records[0].get("noticeId") or records[0].get("infoId")
+                if first_id:
+                    detail_item = await self._request_jwxt_json(client, session_file, "/system-manage/info-delivery/noticeId", {"id": first_id}, menu_id="jwgld_gg", referer=referer)
+                    attempts.append(detail_item)
+        if any(item.get("auth_failed") for item in attempts):
+            return PrivateQueryResult(
+                answer=f"JWXT {label}接口返回 401/403，说明该用户的教务业务会话未建立或已失效；没有生成公告列表。请刷新教务业务会话或重新扫码绑定。",
+                system="jwxt",
+                needs_relogin=True,
+                intent=f"jwxt_notice_{notice_type}",
+                next_action="refresh_business_session",
+                raw={"command": command, "official_source_verified": False, "official_page": referer, "official_endpoints": ["GET /system-manage/info-delivery", "GET /system-manage/info-delivery/noticeId"], "attempts": attempts},
+            )
+        success = self._payload_success(attempts[0])
+        answer = self._summarize_notice_payload(notice_type, attempts[0], detail_item, title_query, department_query) if success else f"已识别为 JWXT {label}查询，但没有取得官方公告接口成功响应，未生成公告列表。"
+        return PrivateQueryResult(
+            answer=answer,
+            system="jwxt",
+            needs_relogin=False,
+            intent=f"jwxt_notice_{notice_type}",
+            next_action="none" if success else "discover_jwxt_notice_params",
+            raw={
+                "command": command,
+                "official_source_verified": bool(success),
+                "official_page": referer,
+                "official_endpoints": ["GET /system-manage/info-delivery", "GET /system-manage/info-delivery/noticeId"],
+                "title_query": title_query,
+                "department_query": department_query,
+                "limit": limit,
+                "using_single_user_fallback": using_fallback,
+                "attempts": attempts,
+            },
+        )
+    async def _query_jwxt_classroom(self, user_id: str, question: str) -> PrivateQueryResult:
+        command = ["jwxt", "classroom-check"]
+        if not private_sysu_auth.has_cas_session(user_id):
+            return self._login_required("jwxt", "jwxt_classroom", command)
+        _, state_dir, using_fallback = private_sysu_auth.effective_user_state_dir(user_id)
+        session_file = state_dir / "jwxt-session.json"
+        if not session_file.exists():
+            return PrivateQueryResult(
+                answer="已完成企业微信/CAS 登录，但尚未生成 JWXT 业务会话，不能查询教室上课情况或空闲教室。请先刷新教务业务会话。",
+                system="jwxt",
+                needs_relogin=True,
+                intent="jwxt_classroom",
+                next_action="refresh_jwxt_session",
+                raw={"session_file_exists": False, "using_single_user_fallback": using_fallback},
+            )
+        building, classroom = self._extract_classroom_text(question)
+        if not building and not classroom:
+            return PrivateQueryResult(
+                answer="已识别为 JWXT 教室上课情况/空闲教室查询。官方页面要求至少选择教学楼或具体教室；请补充教学楼或教室号，例如“查询明天南校园公教楼第1-2节空闲教室”或“查询 E201 今天上课情况”。",
+                system="jwxt",
+                needs_relogin=False,
+                intent="jwxt_classroom_need_location",
+                next_action="need_more_detail",
+                raw={"command": command, "official_source_verified": False},
+            )
+        date = self._extract_date(question)
+        section_range = self._extract_section_range(question)
+        wants_empty = self._contains_any(question, ("空教室", "空闲", "可用", "没课", "无课"))
+        param: dict[str, Any] = {
+            "weekOrTime": "time",
+            "dateA": date,
+            "dateB": date,
+            "checkType": "2" if wants_empty else "1",
+        }
+        if section_range:
+            param["sectionA"], param["sectionB"] = section_range
+        campus = self._infer_campus(question)
+        if campus:
+            param["campusId"] = campus
+        if building:
+            param["teachingBuildID"] = building
+        if classroom:
+            param["classroomID"] = classroom
+        body = {"pageNo": 1, "pageSize": int(self._extract_limit(question, "20")), "total": True, "param": param}
+        referer = f"{self.JWXT_BASE_URL}/mk/schedule-web/#/classroomCheckStu?code=jwxsd_jsskqkjkxjscx"
+        attempts: list[dict[str, Any]] = []
+        async with httpx.AsyncClient(base_url=self.JWXT_BASE_URL, timeout=15.0, follow_redirects=True) as client:
+            item = await self._request_jwxt_json(
+                client,
+                session_file,
+                "/schedule/agg/classroomOccupy/pageCheckList",
+                method="POST",
+                json_body=body,
+                menu_id="jwxsd_jsskqkjkxjscx",
+                referer=referer,
+            )
+            attempts.append(item)
+        if any(item.get("auth_failed") for item in attempts):
+            return PrivateQueryResult(
+                answer="JWXT 教室查询接口返回 401/403，说明该用户的教务业务会话未建立或已失效；没有生成教室结果。请刷新教务业务会话或重新扫码绑定。",
+                system="jwxt",
+                needs_relogin=True,
+                intent="jwxt_classroom",
+                next_action="refresh_business_session",
+                raw={"command": command, "official_source_verified": False, "official_page": referer, "official_endpoints": ["POST /schedule/agg/classroomOccupy/pageCheckList"], "attempts": attempts},
+            )
+        success = any(self._payload_success(item) for item in attempts)
+        answer = self._summarize_classroom_payload(attempts[0], param) if success else "已识别为 JWXT 教室上课情况/空闲教室查询，但尚未取得官方教室查询接口的成功响应，未生成任何教室结果。"
+        return PrivateQueryResult(
+            answer=answer,
+            system="jwxt",
+            needs_relogin=False,
+            intent="jwxt_classroom",
+            next_action="none" if success else "discover_jwxt_classroom_params",
+            raw={
+                "command": command,
+                "official_source_verified": bool(success),
+                "official_page": referer,
+                "official_endpoints": ["POST /schedule/agg/classroomOccupy/pageCheckList", "GET /schedule/agg/classroomOccupy/detail", "GET /schedule/agg/classroomOccupy/scheduleDetailCheck"],
+                "param": param,
+                "using_single_user_fallback": using_fallback,
+                "attempts": attempts,
+            },
+        )
     async def _query_jwxt_exam(self, user_id: str, question: str) -> PrivateQueryResult:
         command = ["jwxt", "exam-direct"]
         if not private_sysu_auth.has_cas_session(user_id):
@@ -1680,6 +2034,14 @@ class SysuAnythingPrivateConnector:
                 f"已生成“{venue_type}”预约预览；未加 confirm，不会自动提交。",
             )
 
+        if self._contains_any(question, ("教务部公告", "教务公告", "院系公告", "学院公告", "JWXT公告", "jwxt公告", "notice/0", "notice/1")) or ("公告" in question and self._contains_any(question, ("教务部", "教务", "院系", "学院", "最近", "主题", "标题"))):
+            department_query = self._extract_notice_department_query(question)
+            notice_type = "1" if department_query or self._contains_any(question, ("院系公告", "学院公告", "notice/1")) or ("公告" in question and "学院" in question and "教务部" not in question) else "0"
+            return ("jwxt", f"jwxt_notice_{notice_type}", ["__DIRECT_JWXT_NOTICE__", notice_type], "已查询 JWXT 官方公告。")
+
+        if self._contains_any(question, ("classroomCheckStu", "空教室", "空闲教室", "教室空闲", "教室上课情况", "上课情况", "空闲课室")):
+            return ("jwxt", "jwxt_classroom", ["__DIRECT_JWXT_CLASSROOM__"], "已查询 JWXT 教室上课情况/空闲教室。")
+
         if self._contains_any(question, ("成绩", "绩点", "GPA", "gpa", "学分")):
             return ("jwxt", "jwxt_grade", ["__DIRECT_JWXT_GRADE__"], "已查询 JWXT 成绩/绩点/学分。")
 
@@ -1820,6 +2182,10 @@ class SysuAnythingPrivateConnector:
             return await self._query_jwxt_grades(user_id, question)
         if command == ["__DIRECT_JWXT_EXAM__"]:
             return await self._query_jwxt_exam(user_id, question)
+        if command == ["__DIRECT_JWXT_CLASSROOM__"]:
+            return await self._query_jwxt_classroom(user_id, question)
+        if len(command) == 2 and command[0] == "__DIRECT_JWXT_NOTICE__":
+            return await self._query_jwxt_notice(user_id, question, command[1])
         if command == ["__DIRECT_JWXT_LEAVE_APPLY__"]:
             return await self._query_jwxt_leave_apply(user_id, question)
         return await self._run(user_id, system, intent, title, command, auth_required=auth_required)
@@ -1870,31 +2236,3 @@ class SysuAnythingAdapter:
             intent="private_dispatch",
             next_action="bind_sysu_account",
         )
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
