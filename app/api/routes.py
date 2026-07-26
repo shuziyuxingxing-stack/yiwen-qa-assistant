@@ -18,7 +18,6 @@ from app.core.models import (
     PersonalQueryRequest,
     PersonalQueryResponse,
     UserProfile,
-    YiwenBrowserImportRequest,
     YiwenCallbackReplayRequest,
 )
 from app.services.chat_service import ChatService
@@ -199,7 +198,6 @@ async def shared_yiwen_chrome_import() -> dict[str, Any]:
         'system': 'yiwen',
         'scope': 'shared',
         'status': 'imported-from-chrome-debug',
-        'result': result,
         'session': shared_yiwen_manager.to_payload(),
         'sysu_anything': sysu_anything_chat.status(),
     }
@@ -238,7 +236,6 @@ async def shared_yiwen_replay_callback(payload: YiwenCallbackReplayRequest) -> d
         'system': 'yiwen',
         'scope': 'shared',
         'status': 'saved-from-sysu-anything-callback',
-        'result': result,
         'session': shared_yiwen_manager.to_payload(),
         'sysu_anything': sysu_anything_chat.status(),
     }
@@ -289,7 +286,7 @@ async def yiwen_chrome_import(authorization: str | None = Header(default=None)) 
     resolved_user_id = resolve_user_id(None, authorization)
     _, user_state_dir, using_fallback = _current_yiwen_state(resolved_user_id)
     try:
-        result = await sysu_anything_chat.import_chrome_debug(state_dir=user_state_dir)
+        await sysu_anything_chat.import_chrome_debug(state_dir=user_state_dir)
     except SysuAnythingCliError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return {
@@ -298,44 +295,10 @@ async def yiwen_chrome_import(authorization: str | None = Header(default=None)) 
         'user_id': resolved_user_id,
         'using_single_user_fallback': using_fallback,
         'status': 'imported-from-chrome-debug',
-        'result': result,
         'sysu_anything': sysu_anything_chat.status(state_dir=user_state_dir),
     }
 
 
-@router.post('/auth/yiwen/browser/import')
-async def yiwen_browser_import(payload: YiwenBrowserImportRequest, authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    resolved_user_id = resolve_user_id(None, authorization)
-    _, user_state_dir, using_fallback = _current_yiwen_state(resolved_user_id)
-    auth_state = sysu_anything_chat.save_browser_auth(
-        token=payload.token,
-        username=payload.username,
-        real_name=payload.real_name,
-        state_dir=user_state_dir,
-    )
-    imported_cookies = None
-    if payload.cookies:
-        try:
-            imported_cookies = await sysu_anything_chat.import_browser_cookies(cookies=payload.cookies, state_dir=user_state_dir)
-        except SysuAnythingCliError:
-            imported_cookies = None
-    try:
-        validation = await sysu_anything_chat.validate_auth(agent_id=DEFAULT_AGENT_ID, state_dir=user_state_dir)
-    except SysuAnythingCliError as exc:
-        raise HTTPException(status_code=502, detail=f'逸问 token 已保存，但校验失败：{exc}') from exc
-    return {
-        'system': 'yiwen',
-        'scope': 'private',
-        'user_id': resolved_user_id,
-        'using_single_user_fallback': using_fallback,
-        'status': 'imported-from-user-browser',
-        'username': auth_state.get('username'),
-        'real_name': auth_state.get('realName'),
-        'jwt_expires_at': auth_state.get('jwtExpiresAt'),
-        'validation': validation,
-        'imported_cookies': imported_cookies,
-        'sysu_anything': sysu_anything_chat.status(state_dir=user_state_dir),
-    }
 @router.post('/auth/yiwen/keepalive')
 async def yiwen_keepalive(authorization: str | None = Header(default=None)) -> dict[str, Any]:
     resolved_user_id = resolve_user_id(None, authorization)

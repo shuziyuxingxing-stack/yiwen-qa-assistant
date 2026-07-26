@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import os
+import socket
 import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from threading import RLock
 from typing import Any
 
 from app.core.runtime import PROJECT_ROOT, resolve_sysu_anything_cli
@@ -49,6 +50,8 @@ class SysuAnythingChatService:
         self.keepalive_interval_seconds = int(os.getenv("YIWEN_KEEPALIVE_SECONDS", "300"))
         self.auto_import_from_chrome = os.getenv("YIWEN_AUTO_IMPORT_CHROME", "1").strip().lower() not in {"0", "false", "no"}
         self.chrome_debug_port = int(os.getenv("YIWEN_CHROME_DEBUG_PORT", "9222"))
+        self._debug_ports: dict[str, int] = {}
+        self._debug_port_lock = RLock()
         self._keepalive_task: asyncio.Task | None = None
         self._last_keepalive: dict[str, Any] = {
             "running": False,
@@ -63,7 +66,33 @@ class SysuAnythingChatService:
     def _resolve_state_dir(self, state_dir: Path | str | None = None) -> Path:
         resolved = Path(state_dir) if state_dir is not None else self.state_dir
         resolved.mkdir(parents=True, exist_ok=True)
-        return resolved
+        return resolved.resolve()
+
+    @staticmethod
+    def _state_key(state_dir: Path) -> str:
+        return str(state_dir).casefold()
+
+    @staticmethod
+    def _allocate_local_port() -> int:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.bind(("127.0.0.1", 0))
+            return int(probe.getsockname()[1])
+
+    @staticmethod
+    def _local_port_is_open(port: int) -> bool:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.25):
+                return True
+        except OSError:
+            return False
+
+    def _registered_debug_port(self, state_dir: Path) -> int | None:
+        with self._debug_port_lock:
+            return self._debug_ports.get(self._state_key(state_dir))
+
+    def _remember_debug_port(self, state_dir: Path, port: int) -> None:
+        with self._debug_port_lock:
+            self._debug_ports[self._state_key(state_dir)] = port
 
     def auth_file(self, state_dir: Path | str | None = None) -> Path:
         return self._resolve_state_dir(state_dir) / "chat-auth.json"
@@ -122,121 +151,6 @@ class SysuAnythingChatService:
             raise SysuAnythingCliError("sysu-anything JSON output is not an object", stdout=stdout, stderr=stderr)
         return parsed
 
-    @staticmethod
-    def _decode_jwt_expiry(token: str) -> int | None:
-        parts = token.split(".")
-        if len(parts) != 3:
-            return None
-        try:
-            payload = parts[1] + "=" * (-len(parts[1]) % 4)
-            decoded = base64.urlsafe_b64decode(payload.encode("ascii"))
-            data = json.loads(decoded.decode("utf-8"))
-        except Exception:
-            return None
-        exp = data.get("exp") if isinstance(data, dict) else None
-        return int(exp) if isinstance(exp, (int, float)) else None
-
-    @staticmethod
-    def _pick_browser_auth(value: str, username: str | None = None, real_name: str | None = None) -> dict[str, str]:
-        def pick(obj: Any) -> dict[str, str] | None:
-            if isinstance(obj, str):
-                text = obj.strip()
-                if not text:
-                    return None
-                if text.lower().startswith("bearer "):
-                    text = text[7:].strip()
-                if text.startswith("{") or text.startswith("["):
-                    try:
-                        return pick(json.loads(text))
-                    except json.JSONDecodeError:
-                        pass
-                if text.count(".") == 2:
-                    return {"token": text}
-                try:
-                    return pick(json.loads(text))
-                except json.JSONDecodeError:
-                    return {"token": text}
-            if isinstance(obj, dict):
-                for key in ("token", "accessToken", "access_token", "bearer_token"):
-                    token_value = obj.get(key)
-                    if isinstance(token_value, str) and token_value.strip():
-                        return {
-                            "token": token_value.strip(),
-                            "username": str(obj.get("username") or username or real_name or "browser-user"),
-                            "real_name": str(obj.get("realName") or obj.get("real_name") or real_name or username or "browser-user"),
-                        }
-                for child in obj.values():
-                    result = pick(child)
-                    if result:
-                        return result
-            return None
-        found = pick(value)
-        if not found:
-            raise SysuAnythingCliError("empty Yiwen token")
-        return found
-
-    def save_browser_auth(
-        self,
-        *,
-        token: str,
-        username: str | None = None,
-        real_name: str | None = None,
-        state_dir: Path | str | None = None,
-    ) -> dict[str, Any]:
-        picked = self._pick_browser_auth(token, username=username, real_name=real_name)
-        cleaned = picked["token"].strip()
-        if not cleaned:
-            raise SysuAnythingCliError("empty Yiwen token")
-        auth_state = {
-            "token": cleaned,
-            "username": (picked.get("username") or username or real_name or "browser-user").strip() or "browser-user",
-            "realName": (picked.get("real_name") or real_name or username or "browser-user").strip() or "browser-user",
-            "obtainedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "jwtExpiresAt": self._decode_jwt_expiry(cleaned),
-        }
-        auth_file = self.auth_file(state_dir)
-        auth_file.parent.mkdir(parents=True, exist_ok=True)
-        auth_file.write_text(json.dumps(auth_state, ensure_ascii=False, indent=2), encoding="utf-8")
-        return auth_state
-    @staticmethod
-    def _cookies_from_browser_payload(cookies: list[dict[str, Any]] | None) -> str | None:
-        if not cookies:
-            return None
-        normalized: list[dict[str, Any]] = []
-        for item in cookies:
-            if not isinstance(item, dict):
-                continue
-            name = str(item.get("name") or "").strip()
-            value = str(item.get("value") or "")
-            domain = str(item.get("domain") or "chat.sysu.edu.cn").strip() or "chat.sysu.edu.cn"
-            if not name or not value:
-                continue
-            if domain not in {"chat.sysu.edu.cn", ".chat.sysu.edu.cn", "appgw.sysu.edu.cn", ".sysu.edu.cn", "cas.sysu.edu.cn", ".cas.sysu.edu.cn"}:
-                continue
-            normalized.append({
-                "name": name,
-                "value": value,
-                "domain": domain,
-                "path": str(item.get("path") or "/"),
-                "secure": bool(item.get("secure", True)),
-                "httpOnly": bool(item.get("httpOnly", False)),
-                "session": bool(item.get("session", True)),
-            })
-        if not normalized:
-            return None
-        return json.dumps({"cookies": normalized}, ensure_ascii=False)
-
-    async def import_browser_cookies(
-        self,
-        *,
-        cookies: list[dict[str, Any]] | None,
-        state_dir: Path | str | None = None,
-    ) -> dict[str, Any] | None:
-        raw = self._cookies_from_browser_payload(cookies)
-        if not raw:
-            return None
-        return await self._run_json("chat", "import-cookies", "--value", raw, "--skip-validate", timeout=45.0, state_dir=state_dir)
-
     async def auth_url(self, *, state_dir: Path | str | None = None) -> dict[str, Any]:
         return await self._run_json("chat", "auth-url", timeout=45.0, state_dir=state_dir)
 
@@ -251,10 +165,12 @@ class SysuAnythingChatService:
         skip_validate: bool = False,
         state_dir: Path | str | None = None,
     ) -> dict[str, Any]:
-        args = ["chat", "import-chrome-debug", "--host", host, "--port", str(port or self.chrome_debug_port)]
+        resolved_state_dir = self._resolve_state_dir(state_dir)
+        resolved_port = port or self._registered_debug_port(resolved_state_dir) or self.chrome_debug_port
+        args = ["chat", "import-chrome-debug", "--host", host, "--port", str(resolved_port)]
         if skip_validate:
             args.append("--skip-validate")
-        return await self._run_json(*args, timeout=90.0, state_dir=state_dir)
+        return await self._run_json(*args, timeout=90.0, state_dir=resolved_state_dir)
 
     async def validate_auth(self, *, agent_id: str = "default", state_dir: Path | str | None = None) -> dict[str, Any]:
         return await self._run_json("chat", "agent", "--id", agent_id, timeout=45.0, state_dir=state_dir)
@@ -432,16 +348,28 @@ class SysuAnythingChatService:
         return result
 
     def launch_chrome_debug(self, *, port: int | None = None, state_dir: Path | str | None = None) -> dict[str, Any]:
-        resolved_port = port or self.chrome_debug_port
         chrome_path = self._find_chrome()
         if not chrome_path:
             raise SysuAnythingCliError("Chrome or Edge was not found; cannot launch the Yiwen login browser.")
         resolved_state_dir = self._resolve_state_dir(state_dir)
+        existing_port = self._registered_debug_port(resolved_state_dir)
+        if port is None and existing_port and self._local_port_is_open(existing_port):
+            return {
+                "started": True,
+                "reused": True,
+                "port": existing_port,
+                "profile_dir": str(resolved_state_dir / "chrome-profile"),
+                "state_dir": str(resolved_state_dir),
+                "url": "https://chat.sysu.edu.cn/znt/chat/empty",
+                "message": "The existing local Yiwen authorization window is ready.",
+            }
+        resolved_port = port or (self._allocate_local_port() if state_dir is not None else self.chrome_debug_port)
         chrome_profile_dir = resolved_state_dir / "chrome-profile"
         chrome_profile_dir.mkdir(parents=True, exist_ok=True)
         args = [
             str(chrome_path),
             f"--remote-debugging-port={resolved_port}",
+            "--remote-debugging-address=127.0.0.1",
             f"--user-data-dir={chrome_profile_dir}",
             "--no-first-run",
             "--new-window",
@@ -451,6 +379,7 @@ class SysuAnythingChatService:
         if os.name == "nt":
             creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
         proc = subprocess.Popen(args, cwd=str(self.project_root), creationflags=creationflags)
+        self._remember_debug_port(resolved_state_dir, resolved_port)
         return {
             "started": True,
             "pid": proc.pid,
@@ -557,6 +486,8 @@ class SysuAnythingChatService:
             "auth_file": str(auth_file),
             "session_file": str(self.session_file(resolved_state_dir)),
             "cli_path": str(self.cli_path),
+            "chrome_debug_host": "127.0.0.1",
+            "active_chrome_debug_port": self._registered_debug_port(resolved_state_dir),
             "username": auth.get("username") if auth else None,
             "real_name": auth.get("realName") if auth else None,
             "obtained_at": auth.get("obtainedAt") if auth else None,

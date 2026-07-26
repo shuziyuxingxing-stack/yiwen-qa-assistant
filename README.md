@@ -68,7 +68,7 @@ http://127.0.0.1:8013
 
 ### 官方逸问
 
-本地部署可启动一个独立 Chrome/Edge 配置目录。用户在官方逸问页面完成授权后，本地后端通过浏览器调试接口把逸问 token 导入当前用户的状态目录。
+本地部署会为当前用户启动独立的 Chrome/Edge 配置目录和动态 localhost 调试端口。用户只需在官方逸问页面完成授权；前端自动轮询本地后端，后端通过 CDP 和 SYSU-Anything 读取 token 并写入当前用户的 `.state`。token 不返回给前端，也不需要用户复制、粘贴或运行控制台脚本。
 
 逸问使用独立的 `qwweb` 授权链。仅拥有 CAS 或教务系统会话不保证可以生成逸问 token。若跳转到 `appgw.sysu.edu.cn` 后出现 `Access Forbidden`，请在校园网或学校 VPN 环境下重试；这可能是网关对公网出口的访问限制。
 
@@ -210,6 +210,15 @@ Content-Type: application/json
   "search_source": "freshman_materials"
 }
 ```
+
+## 发布检查
+
+```powershell
+.\scripts\security-check.ps1
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
+
+安全检查会扫描当前跟踪文件和完整 Git 历史，阻止提交运行时状态、私钥、常见凭据格式和 VPS 地址。浏览器调试接口仅绑定 `127.0.0.1`，每个本地用户使用独立动态端口。
 
 ## SYSU-Anything 的关系
 

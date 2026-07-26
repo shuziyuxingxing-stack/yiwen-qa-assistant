@@ -43,14 +43,6 @@ class YiwenCallbackReplayRequest(BaseModel):
     callback_url: str | None = None
 
 
-class YiwenBrowserImportRequest(BaseModel):
-    token: str = Field(..., min_length=16)
-    username: str | None = None
-    real_name: str | None = None
-    cookies: list[dict[str, object]] | None = None
-
-
-
 class AnswerSource(BaseModel):
     type: SourceType
     title: str
