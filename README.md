@@ -211,14 +211,6 @@ Content-Type: application/json
 }
 ```
 
-## 发布检查
-
-```powershell
-.\scripts\security-check.ps1
-.\.venv\Scripts\python.exe -m unittest discover -s tests -v
-```
-
-安全检查会扫描当前跟踪文件和完整 Git 历史，阻止提交运行时状态、私钥、常见凭据格式和 VPS 地址。浏览器调试接口仅绑定 `127.0.0.1`，每个本地用户使用独立动态端口。
 
 ## SYSU-Anything 的关系
 
