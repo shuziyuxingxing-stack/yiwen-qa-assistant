@@ -217,3 +217,6 @@ Content-Type: application/json
 本项目使用 SYSU-Anything 作为校园系统驱动层，负责 CAS/企业微信登录、会话持久化、教务连接以及逸问发送和历史记录操作。
 
 - [SYSU-Anything](https://github.com/qybaihe/SYSU-Anything)
+
+##其余公益项目
+如果您在浏览本项目时，希望查找中山大学校内其他公益项目，欢迎加入微信群：鸭大公益项目
