@@ -218,5 +218,6 @@ Content-Type: application/json
 
 - [SYSU-Anything](https://github.com/qybaihe/SYSU-Anything)
 
-##其余公益项目
-如果您在浏览本项目时，希望查找中山大学校内其他公益项目，欢迎加入微信群：鸭大公益项目
+## 其余公益项目
+
+如果您在浏览本项目时，希望查找了解中山大学校内其他公益项目，或作为富有公益心的开发者希望推广或共建您的项目，欢迎加入微信群：鸭大公益项目
